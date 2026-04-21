@@ -15,6 +15,7 @@ from cartopy.io import shapereader
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HTML_NAME = "tasa_crecimiento_promedio_distritos_interactivo.html"
+DEFAULT_PAGES_DIR = ROOT / "docs"
 LOWERCASE_WORDS = {"de", "del", "la", "las", "los", "y", "e", "o", "u", "da", "das", "do", "dos"}
 ROMAN_NUMERAL_RE = re.compile(r"^[ivxlcdm]+$", re.IGNORECASE)
 DEFAULT_CLASSIFICATION_MODE = "deciles"
@@ -1909,6 +1910,7 @@ def build_interactive_growth_artifacts(
     excel_path: Path | None = None,
     geo_path: Path | None = None,
     figures_dir: Path | None = None,
+    docs_dir: Path | None = None,
     html_name: str = DEFAULT_HTML_NAME,
 ) -> dict:
     if map_gdf is None:
@@ -1916,6 +1918,8 @@ def build_interactive_growth_artifacts(
 
     figures_dir = figures_dir or resolve_existing_path([Path("figures")])
     figures_dir.mkdir(exist_ok=True)
+    docs_dir = (docs_dir or DEFAULT_PAGES_DIR).resolve()
+    docs_dir.mkdir(parents=True, exist_ok=True)
 
     prepared = prepare_growth_ranking(map_gdf)
     classification_presets = build_classification_presets(prepared)
@@ -1955,6 +1959,10 @@ def build_interactive_growth_artifacts(
         classification_modes=CLASSIFICATION_MODES,
     )
     html_path.write_text(html_string, encoding="utf-8")
+    pages_path = docs_dir / "index.html"
+    pages_path.write_text(html_string, encoding="utf-8")
+    nojekyll_path = docs_dir / ".nojekyll"
+    nojekyll_path.write_text("GitHub Pages: deploy static HTML without Jekyll.\n", encoding="utf-8")
 
     ordered = prepared.sort_values("growth_rank").reset_index(drop=True)
     top_row = ordered.iloc[0]
@@ -1977,6 +1985,8 @@ def build_interactive_growth_artifacts(
         "figure": figure,
         "config": config,
         "html_path": html_path,
+        "pages_path": pages_path,
+        "nojekyll_path": nojekyll_path,
         "summary": summary,
         "map_df": prepared,
     }
@@ -1986,6 +1996,7 @@ def main() -> None:
     artifacts = build_interactive_growth_artifacts()
     summary = artifacts["summary"].iloc[0]
     print(f"HTML interactivo escrito en: {artifacts['html_path']}")
+    print(f"HTML para GitHub Pages escrito en: {artifacts['pages_path']}")
     print(f"Distritos: {int(summary['distritos'])}")
     print(f"Top 1: {summary['top_1']}")
     print(f"Bottom 1: {summary['bottom_1']}")
