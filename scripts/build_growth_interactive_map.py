@@ -559,7 +559,7 @@ def _build_interactive_dashboard_html(
       --edge-gap: clamp(12px, 1.8vw, 20px);
       --panel-gap: clamp(12px, 2vw, 22px);
       --controls-width: min(292px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.42));
-      --years-width: min(324px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.46));
+      --years-width: min(348px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.5));
       --left-stack-width: max(var(--controls-width), var(--years-width));
       --left-stack-bottom: max(96px, calc(env(safe-area-inset-bottom) + 30px));
     }}
@@ -973,7 +973,7 @@ def _build_interactive_dashboard_html(
         width: min(274px, calc(100vw - 28px));
       }}
       .years-shell {{
-        width: min(304px, calc(100vw - 28px));
+        width: min(320px, calc(100vw - 28px));
       }}
       .panel {{
         top: auto;
@@ -1006,7 +1006,7 @@ def _build_interactive_dashboard_html(
         line-height: 1.3;
       }}
       .years-shell {{
-        width: min(304px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.48));
+        width: min(320px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.52));
         padding: 11px 11px 9px;
       }}
       .years-subtitle {{
@@ -1054,7 +1054,7 @@ def _build_interactive_dashboard_html(
         font-size: 9.5px;
       }}
       .years-shell {{
-        width: min(284px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.5));
+        width: min(300px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.54));
         padding: 9px 9px 8px;
       }}
       .years-subtitle {{
@@ -1093,7 +1093,7 @@ def _build_interactive_dashboard_html(
       padding: 9px 9px 8px;
     }}
     .left-overlay-stack.is-tight .years-shell {{
-      width: min(292px, 100%);
+      width: min(308px, 100%);
       padding: 10px 10px 8px;
     }}
     .left-overlay-stack.is-tight .control-select {{
@@ -1131,7 +1131,7 @@ def _build_interactive_dashboard_html(
       padding: 8px 8px 7px;
     }}
     .left-overlay-stack.is-compact .years-shell {{
-      width: min(272px, 100%);
+      width: min(288px, 100%);
       padding: 8px 8px 7px;
     }}
     .left-overlay-stack.is-compact .controls-grid {{
