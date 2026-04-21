@@ -560,6 +560,8 @@ def _build_interactive_dashboard_html(
       --panel-gap: clamp(12px, 2vw, 22px);
       --controls-width: min(292px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.42));
       --years-width: min(324px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.46));
+      --left-stack-width: max(var(--controls-width), var(--years-width));
+      --left-stack-bottom: max(96px, calc(env(safe-area-inset-bottom) + 30px));
     }}
     * {{
       box-sizing: border-box;
@@ -588,18 +590,31 @@ def _build_interactive_dashboard_html(
       width: 100%;
       padding: 0;
     }}
-    .controls-shell {{
+    .left-overlay-stack {{
       position: absolute;
       top: max(var(--edge-gap), calc(env(safe-area-inset-top) + 10px));
       left: max(var(--edge-gap), calc(env(safe-area-inset-left) + 10px));
+      bottom: var(--left-stack-bottom);
       z-index: 30;
-      width: var(--controls-width);
+      width: var(--left-stack-width);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 18px;
+      pointer-events: none;
+    }}
+    .controls-shell {{
+      position: relative;
+      z-index: 1;
+      width: min(var(--controls-width), 100%);
       background: rgba(255, 255, 255, 0.95);
       border: 1px solid rgba(216, 208, 193, 0.96);
       border-radius: 16px;
       box-shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
       backdrop-filter: blur(10px);
       padding: 10px 10px 9px;
+      pointer-events: auto;
     }}
     .controls-title {{
       margin: 0 0 8px;
@@ -658,20 +673,18 @@ def _build_interactive_dashboard_html(
       line-height: 1.35;
     }}
     .years-shell {{
-      position: absolute;
-      left: max(var(--edge-gap), calc(env(safe-area-inset-left) + 10px));
-      bottom: max(82px, calc(env(safe-area-inset-bottom) + 28px));
-      z-index: 30;
-      width: var(--years-width);
-      max-height: min(276px, calc(100vh - 176px));
+      position: relative;
+      z-index: 1;
+      width: min(var(--years-width), 100%);
       background: rgba(255, 255, 255, 0.95);
       border: 1px solid rgba(216, 208, 193, 0.96);
       border-radius: 18px;
       box-shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
       backdrop-filter: blur(10px);
       padding: 12px 12px 10px;
-      overflow: auto;
-      scrollbar-width: thin;
+      overflow: visible;
+      scrollbar-width: none;
+      pointer-events: auto;
     }}
     .years-title {{
       margin: 0 0 4px;
@@ -950,16 +963,17 @@ def _build_interactive_dashboard_html(
       line-height: 1.45;
     }}
     @media (max-width: 980px) {{
-      .controls-shell {{
+      .left-overlay-stack {{
         top: max(14px, calc(env(safe-area-inset-top) + 6px));
         left: max(14px, calc(env(safe-area-inset-left) + 6px));
+        bottom: max(64px, calc(env(safe-area-inset-bottom) + 20px));
+        width: min(304px, calc(100vw - 28px));
+      }}
+      .controls-shell {{
         width: min(274px, calc(100vw - 28px));
       }}
       .years-shell {{
-        left: max(14px, calc(env(safe-area-inset-left) + 6px));
-        bottom: max(54px, calc(env(safe-area-inset-bottom) + 18px));
         width: min(304px, calc(100vw - 28px));
-        max-height: min(252px, calc(100vh - 146px));
       }}
       .panel {{
         top: auto;
@@ -978,6 +992,10 @@ def _build_interactive_dashboard_html(
       }}
     }}
     @media (max-height: 900px) {{
+      .left-overlay-stack {{
+        bottom: max(84px, calc(env(safe-area-inset-bottom) + 26px));
+        gap: 14px;
+      }}
       .controls-shell {{
         width: min(276px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.44));
         padding: 9px 9px 8px;
@@ -988,9 +1006,7 @@ def _build_interactive_dashboard_html(
         line-height: 1.3;
       }}
       .years-shell {{
-        bottom: max(96px, calc(env(safe-area-inset-bottom) + 34px));
         width: min(304px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.48));
-        max-height: min(248px, calc(100vh - 170px));
         padding: 11px 11px 9px;
       }}
       .years-subtitle {{
@@ -1014,8 +1030,12 @@ def _build_interactive_dashboard_html(
       }}
     }}
     @media (max-height: 780px) {{
-      .controls-shell {{
+      .left-overlay-stack {{
         top: max(10px, calc(env(safe-area-inset-top) + 4px));
+        bottom: max(76px, calc(env(safe-area-inset-bottom) + 22px));
+        gap: 12px;
+      }}
+      .controls-shell {{
         width: min(256px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.44));
       }}
       .control-select {{
@@ -1034,9 +1054,7 @@ def _build_interactive_dashboard_html(
         font-size: 9.5px;
       }}
       .years-shell {{
-        bottom: max(108px, calc(env(safe-area-inset-bottom) + 40px));
         width: min(284px, calc(100vw - (var(--edge-gap) * 2)), calc(100vh * 0.5));
-        max-height: min(224px, calc(100vh - 154px));
         padding: 9px 9px 8px;
       }}
       .years-subtitle {{
@@ -1067,6 +1085,104 @@ def _build_interactive_dashboard_html(
         font-size: 20px;
       }}
     }}
+    .left-overlay-stack.is-tight {{
+      gap: 12px;
+    }}
+    .left-overlay-stack.is-tight .controls-shell {{
+      width: min(264px, 100%);
+      padding: 9px 9px 8px;
+    }}
+    .left-overlay-stack.is-tight .years-shell {{
+      width: min(292px, 100%);
+      padding: 10px 10px 8px;
+    }}
+    .left-overlay-stack.is-tight .control-select {{
+      padding: 8px 9px;
+      font-size: 12px;
+    }}
+    .left-overlay-stack.is-tight .controls-title,
+    .left-overlay-stack.is-tight .control-label,
+    .left-overlay-stack.is-tight .years-title,
+    .left-overlay-stack.is-tight .year-pill-label,
+    .left-overlay-stack.is-tight .formula-label {{
+      font-size: 9px;
+    }}
+    .left-overlay-stack.is-tight .controls-footnote,
+    .left-overlay-stack.is-tight .controls-note-secondary,
+    .left-overlay-stack.is-tight .years-subtitle,
+    .left-overlay-stack.is-tight .formula-main {{
+      font-size: 11px;
+      line-height: 1.3;
+    }}
+    .left-overlay-stack.is-tight .year-pill {{
+      padding: 7px 9px;
+    }}
+    .left-overlay-stack.is-tight .year-pill-value {{
+      font-size: 15px;
+    }}
+    .left-overlay-stack.is-tight .formula-current {{
+      font-size: 9px;
+    }}
+    .left-overlay-stack.is-compact {{
+      gap: 10px;
+    }}
+    .left-overlay-stack.is-compact .controls-shell {{
+      width: min(248px, 100%);
+      padding: 8px 8px 7px;
+    }}
+    .left-overlay-stack.is-compact .years-shell {{
+      width: min(272px, 100%);
+      padding: 8px 8px 7px;
+    }}
+    .left-overlay-stack.is-compact .controls-grid {{
+      grid-template-columns: 1fr;
+      gap: 7px;
+    }}
+    .left-overlay-stack.is-compact .control-select {{
+      padding: 7px 8px;
+      font-size: 11px;
+    }}
+    .left-overlay-stack.is-compact .controls-title,
+    .left-overlay-stack.is-compact .control-label,
+    .left-overlay-stack.is-compact .years-title,
+    .left-overlay-stack.is-compact .year-pill-label,
+    .left-overlay-stack.is-compact .formula-label {{
+      font-size: 8.5px;
+    }}
+    .left-overlay-stack.is-compact .controls-footnote,
+    .left-overlay-stack.is-compact .controls-note-secondary,
+    .left-overlay-stack.is-compact .years-subtitle,
+    .left-overlay-stack.is-compact .formula-main {{
+      font-size: 10px;
+      line-height: 1.25;
+    }}
+    .left-overlay-stack.is-compact .years-values {{
+      gap: 6px;
+      margin-bottom: 7px;
+    }}
+    .left-overlay-stack.is-compact .year-pill {{
+      padding: 6px 8px;
+      gap: 2px;
+    }}
+    .left-overlay-stack.is-compact .year-pill-value {{
+      font-size: 14px;
+    }}
+    .left-overlay-stack.is-compact .dual-range {{
+      height: 28px;
+      margin-bottom: 6px;
+    }}
+    .left-overlay-stack.is-compact .range-track-bg,
+    .left-overlay-stack.is-compact .range-track-active {{
+      top: 12px;
+    }}
+    .left-overlay-stack.is-compact .formula-box {{
+      padding: 8px 8px 6px;
+      margin-bottom: 0;
+    }}
+    .left-overlay-stack.is-compact .formula-current {{
+      font-size: 8.5px;
+      white-space: normal;
+    }}
     @media (max-width: 640px) {{
       .controls-grid {{
         grid-template-columns: 1fr;
@@ -1086,48 +1202,50 @@ def _build_interactive_dashboard_html(
 <body>
   <div class="app-shell">
     <div class="map-shell">
-      <div class="controls-shell">
-        <p class="controls-title">Clasificación cartográfica</p>
-        <div class="controls-grid">
-          <label class="control-field">
-            <span class="control-label">Agrupación</span>
-            <select id="classification-mode" class="control-select">
-              {classification_options}
-            </select>
-          </label>
-          <label class="control-field">
-            <span class="control-label">Escala de color</span>
-            <select id="color-preset" class="control-select">
-              {palette_options}
-            </select>
-          </label>
-        </div>
-        <p class="controls-footnote">Base inicial: deciles con paleta rojo → verde. Puedes cambiar ambas opciones sin recargar el mapa.</p>
-        <p class="controls-note-secondary">Pasa el cursor sobre un distrito para ver su información. Haz clic para abrir el gráfico con la trayectoria del PBI distrital.</p>
-      </div>
-      <div class="years-shell">
-        <p class="years-title">Rango temporal del cálculo</p>
-        <p class="years-subtitle">Elige los años usados para recalcular la tasa de crecimiento promedio anual.</p>
-        <div class="years-values">
-          <div class="year-pill">
-            <span class="year-pill-label">Año inicial</span>
-            <span id="year-start-value" class="year-pill-value">1993</span>
+      <div id="left-overlay-stack" class="left-overlay-stack">
+        <div id="controls-shell" class="controls-shell">
+          <p class="controls-title">Clasificación cartográfica</p>
+          <div class="controls-grid">
+            <label class="control-field">
+              <span class="control-label">Agrupación</span>
+              <select id="classification-mode" class="control-select">
+                {classification_options}
+              </select>
+            </label>
+            <label class="control-field">
+              <span class="control-label">Escala de color</span>
+              <select id="color-preset" class="control-select">
+                {palette_options}
+              </select>
+            </label>
           </div>
-          <div class="year-pill">
-            <span class="year-pill-label">Año final</span>
-            <span id="year-end-value" class="year-pill-value">2018</span>
+          <p class="controls-footnote">Base inicial: deciles con paleta rojo → verde. Puedes cambiar ambas opciones sin recargar el mapa.</p>
+          <p class="controls-note-secondary">Pasa el cursor sobre un distrito para ver su información. Haz clic para abrir el gráfico con la trayectoria del PBI distrital.</p>
+        </div>
+        <div id="years-shell" class="years-shell">
+          <p class="years-title">Rango temporal del cálculo</p>
+          <p class="years-subtitle">Elige los años usados para recalcular la tasa de crecimiento promedio anual.</p>
+          <div class="years-values">
+            <div class="year-pill">
+              <span class="year-pill-label">Año inicial</span>
+              <span id="year-start-value" class="year-pill-value">1993</span>
+            </div>
+            <div class="year-pill">
+              <span class="year-pill-label">Año final</span>
+              <span id="year-end-value" class="year-pill-value">2018</span>
+            </div>
           </div>
-        </div>
-        <div class="dual-range">
-          <div class="range-track-bg"></div>
-          <div id="range-track-active" class="range-track-active"></div>
-          <input id="year-range-start" class="year-range" type="range" min="1993" max="2018" step="1" value="1993" />
-          <input id="year-range-end" class="year-range" type="range" min="1993" max="2018" step="1" value="2018" />
-        </div>
-        <div class="formula-box">
-          <p class="formula-label">Fórmula usada</p>
-          <p class="formula-main">Tasa promedio anual = (ln(PBI final) − ln(PBI inicial)) / (año final − año inicial + 1)</p>
-          <p id="formula-current" class="formula-current">Actualmente: (ln(PBI 2018) − ln(PBI 1993)) / (2018 − 1993 + 1)</p>
+          <div class="dual-range">
+            <div class="range-track-bg"></div>
+            <div id="range-track-active" class="range-track-active"></div>
+            <input id="year-range-start" class="year-range" type="range" min="1993" max="2018" step="1" value="1993" />
+            <input id="year-range-end" class="year-range" type="range" min="1993" max="2018" step="1" value="2018" />
+          </div>
+          <div class="formula-box">
+            <p class="formula-label">Fórmula usada</p>
+            <p class="formula-main">Tasa promedio anual = (ln(PBI final) − ln(PBI inicial)) / (año final − año inicial + 1)</p>
+            <p id="formula-current" class="formula-current">Actualmente: (ln(PBI 2018) − ln(PBI 1993)) / (2018 − 1993 + 1)</p>
+          </div>
         </div>
       </div>
       {plot_div}
@@ -1185,6 +1303,9 @@ def _build_interactive_dashboard_html(
       currentMetrics: null
     }};
     const mapPlot = document.getElementById('district-map');
+    const leftOverlayStack = document.getElementById('left-overlay-stack');
+    const controlsShell = document.getElementById('controls-shell');
+    const yearsShell = document.getElementById('years-shell');
     const classificationSelect = document.getElementById('classification-mode');
     const colorPresetSelect = document.getElementById('color-preset');
     const yearRangeStart = document.getElementById('year-range-start');
@@ -1426,6 +1547,24 @@ def _build_interactive_dashboard_html(
       rangeTrackActive.style.right = (100 - right) + '%';
     }}
 
+    function syncLeftOverlayDensity() {{
+      if (!leftOverlayStack || !controlsShell || !yearsShell) {{
+        return;
+      }}
+      leftOverlayStack.classList.remove('is-tight', 'is-compact');
+      const gap = parseFloat(window.getComputedStyle(leftOverlayStack).gap || '18');
+      const availableHeight = leftOverlayStack.getBoundingClientRect().height;
+      const naturalHeight = controlsShell.getBoundingClientRect().height + yearsShell.getBoundingClientRect().height + gap;
+      if (naturalHeight > availableHeight - 4) {{
+        leftOverlayStack.classList.add('is-tight');
+      }}
+      const tightGap = parseFloat(window.getComputedStyle(leftOverlayStack).gap || '12');
+      const tightenedHeight = controlsShell.getBoundingClientRect().height + yearsShell.getBoundingClientRect().height + tightGap;
+      if (tightenedHeight > availableHeight - 4) {{
+        leftOverlayStack.classList.add('is-compact');
+      }}
+    }}
+
     function applyMapEncoding() {{
       state.currentMetrics = buildCurrentMetrics();
       const currentMetrics = state.currentMetrics;
@@ -1453,6 +1592,7 @@ def _build_interactive_dashboard_html(
       if (state.selectedUbigeo) {{
         renderSeriesPanel(state.selectedUbigeo);
       }}
+      window.requestAnimationFrame(syncLeftOverlayDensity);
     }}
 
     function closePanel() {{
@@ -1579,6 +1719,8 @@ def _build_interactive_dashboard_html(
       yearRangeEnd.value = state.endYear;
       state.currentMetrics = buildCurrentMetrics();
       updateYearRangeUI();
+      window.requestAnimationFrame(syncLeftOverlayDensity);
+      window.setTimeout(syncLeftOverlayDensity, 120);
     }}
 
     panelClose.addEventListener('click', closePanel);
@@ -1614,6 +1756,15 @@ def _build_interactive_dashboard_html(
     yearRangeEnd.addEventListener('change', function() {{
       applyMapEncoding();
     }});
+
+    window.addEventListener('resize', syncLeftOverlayDensity);
+    if (window.visualViewport) {{
+      window.visualViewport.addEventListener('resize', syncLeftOverlayDensity);
+      window.visualViewport.addEventListener('scroll', syncLeftOverlayDensity);
+    }}
+    if (document.fonts && typeof document.fonts.ready === 'object') {{
+      document.fonts.ready.then(syncLeftOverlayDensity).catch(function() {{}});
+    }}
 
     initializeInteractiveMap();
   </script>
