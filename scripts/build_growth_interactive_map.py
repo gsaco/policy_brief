@@ -332,6 +332,24 @@ def load_district_pib_trajectories(*, excel_path: Path | None = None) -> tuple[p
     return trajectories, year_columns
 
 
+def load_province_pib_trajectories(*, excel_path: Path | None = None) -> tuple[pd.DataFrame, list[int]]:
+    excel_path = excel_path or resolve_existing_path([Path("contribuciones.xlsx")])
+    prov_levels_raw = pd.read_excel(excel_path, sheet_name="PIB_Prov")
+    prov_levels_raw["province_ubigeo"] = _format_ubigeo(prov_levels_raw["Ubigeo"])
+
+    year_columns = [year for year in range(1993, 2019) if year in prov_levels_raw.columns]
+    keep_columns = ["province_ubigeo", "Departamento", "Provincia", *year_columns]
+    trajectories = prov_levels_raw.loc[
+        prov_levels_raw["Provincia"].map(_clean_geo_value).notna(),
+        keep_columns,
+    ].copy()
+
+    for column in ["Departamento", "Provincia"]:
+        trajectories[column] = trajectories[column].map(_pretty_geo_name)
+    trajectories[year_columns] = trajectories[year_columns].apply(pd.to_numeric, errors="coerce")
+    return trajectories, year_columns
+
+
 def prepare_growth_ranking(map_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     required_cols = {"ubigeo", "geometry", "avg_growth_9318"}
     missing = required_cols.difference(map_gdf.columns)
@@ -473,9 +491,16 @@ def _build_trajectory_payload(
     ranked_map: gpd.GeoDataFrame,
     *,
     excel_path: Path | None = None,
-) -> dict:
+) -> tuple[dict, dict]:
     trajectories, years = load_district_pib_trajectories(excel_path=excel_path)
+    province_trajectories, province_years = load_province_pib_trajectories(excel_path=excel_path)
+    if years != province_years:
+        missing_years = sorted(set(years).difference(province_years))
+        if missing_years:
+            raise ValueError(f"Faltan años provinciales para el mapa interactivo: {missing_years}")
+
     trajectories = trajectories[["ubigeo", *years]].copy()
+    trajectories["province_ubigeo"] = trajectories["ubigeo"].str[:4] + "00"
     metadata_cols = [
         "ubigeo",
         "Distrito",
@@ -491,10 +516,30 @@ def _build_trajectory_payload(
         validate="one_to_one",
     )
 
-    payload = {}
+    province_payload = {}
+    province_trajectories = province_trajectories.drop_duplicates(subset=["province_ubigeo"], keep="first")
+    province_trajectories = province_trajectories.set_index("province_ubigeo")
+    needed_province_ubigeos = sorted(merged["province_ubigeo"].dropna().unique())
+    for province_ubigeo in needed_province_ubigeos:
+        if province_ubigeo not in province_trajectories.index:
+            continue
+        row = province_trajectories.loc[province_ubigeo]
+        province_payload[str(province_ubigeo)] = {
+            "province_ubigeo": str(province_ubigeo),
+            "provincia": row["Provincia"],
+            "departamento": row["Departamento"],
+            "years": years,
+            "values": [
+                None if pd.isna(row[year]) else float(row[year])
+                for year in years
+            ],
+        }
+
+    district_payload = {}
     for _, row in merged.iterrows():
-        payload[str(row["ubigeo"])] = {
+        district_payload[str(row["ubigeo"])] = {
             "ubigeo": str(row["ubigeo"]),
+            "province_ubigeo": str(row["province_ubigeo"]),
             "distrito": row["Distrito"],
             "provincia": row["Provincia"],
             "departamento": row["Departamento"],
@@ -507,7 +552,7 @@ def _build_trajectory_payload(
             ],
         }
 
-    return payload
+    return district_payload, province_payload
 
 
 def _build_interactive_dashboard_html(
@@ -515,6 +560,7 @@ def _build_interactive_dashboard_html(
     *,
     config: dict,
     trajectory_payload: dict,
+    province_payload: dict,
     classification_modes: dict,
 ) -> str:
     plot_div = pio.to_html(
@@ -525,6 +571,7 @@ def _build_interactive_dashboard_html(
         div_id="district-map",
     )
     trajectory_json = json.dumps(trajectory_payload, ensure_ascii=False)
+    province_json = json.dumps(province_payload, ensure_ascii=False)
     classification_json = json.dumps(classification_modes, ensure_ascii=False)
     palette_json = json.dumps(COLOR_PRESETS, ensure_ascii=False)
     classification_options = "\n".join(
@@ -1221,7 +1268,7 @@ def _build_interactive_dashboard_html(
             </label>
           </div>
           <p class="controls-footnote">Base inicial: deciles con paleta rojo → verde. Puedes cambiar ambas opciones sin recargar el mapa.</p>
-          <p class="controls-note-secondary">Pasa el cursor sobre un distrito para ver su información. Haz clic para abrir el gráfico con la trayectoria del PBI distrital.</p>
+          <p class="controls-note-secondary">Pasa el cursor sobre un distrito para ver su información. Haz clic para comparar su PBI con la trayectoria provincial.</p>
         </div>
         <div id="years-shell" class="years-shell">
           <p class="years-title">Rango temporal del cálculo</p>
@@ -1256,15 +1303,15 @@ def _build_interactive_dashboard_html(
         <div>
           <p class="panel-kicker">Trayectoria del PBI</p>
           <h2 id="panel-title" class="panel-title">Selecciona un distrito</h2>
-          <p id="panel-subtitle" class="panel-subtitle">Haz clic sobre cualquier distrito del mapa para abrir su serie 1993-2018.</p>
+          <p id="panel-subtitle" class="panel-subtitle">Haz clic sobre cualquier distrito del mapa para abrir su serie 1993-2018 junto con la provincial.</p>
         </div>
         <button id="panel-close" class="panel-close" type="button" aria-label="Cerrar panel">×</button>
       </div>
       <div class="panel-body">
         <div id="panel-placeholder" class="panel-placeholder">
           <span class="placeholder-chip">Clic en el mapa</span>
-          <p class="placeholder-title">Serie anual del PBI distrital</p>
-          <p class="placeholder-copy">Al seleccionar un distrito se mostrará su trayectoria anual de PBI entre 1993 y 2018, junto con su clase activa de crecimiento y su ranking nacional.</p>
+          <p class="placeholder-title">Series anuales de PBI</p>
+          <p class="placeholder-copy">Al seleccionar un distrito se mostrará su trayectoria anual de PBI entre 1993 y 2018 y, en el eje derecho, la trayectoria de su provincia.</p>
         </div>
         <div id="panel-content" style="display:none;">
           <div class="metrics-grid">
@@ -1290,6 +1337,7 @@ def _build_interactive_dashboard_html(
 
   <script>
     const DISTRICT_SERIES = {trajectory_json};
+    const PROVINCE_SERIES = {province_json};
     const CLASSIFICATION_PRESETS = {classification_json};
     const COLOR_PRESETS = {palette_json};
     const DEFAULT_MODE = '{DEFAULT_CLASSIFICATION_MODE}';
@@ -1600,7 +1648,7 @@ def _build_interactive_dashboard_html(
       state.selectedUbigeo = null;
       districtPanel.classList.add('is-hidden');
       panelTitle.textContent = 'Selecciona un distrito';
-      panelSubtitle.textContent = 'Haz clic sobre cualquier distrito del mapa para abrir su serie 1993-2018.';
+      panelSubtitle.textContent = 'Haz clic sobre cualquier distrito del mapa para abrir su serie 1993-2018 junto con la provincial.';
       panelPlaceholder.style.display = 'grid';
       panelContent.style.display = 'none';
       Plotly.purge('series-plot');
@@ -1615,6 +1663,7 @@ def _build_interactive_dashboard_html(
       state.currentMetrics = currentMetrics;
       const scheme = currentMetrics.scheme;
       const klass = currentMetrics.byUbigeo[String(ubigeo)];
+      const province = district.province_ubigeo ? PROVINCE_SERIES[String(district.province_ubigeo)] : null;
 
       state.selectedUbigeo = String(ubigeo);
       districtPanel.classList.remove('is-hidden');
@@ -1627,15 +1676,17 @@ def _build_interactive_dashboard_html(
       metricClassLabel.textContent = scheme.singular;
       metricClass.textContent = klass.label;
       metricGrowth.textContent = formatGrowth(klass.growth);
-      panelNote.textContent = 'Rango del ' + scheme.singular.toLowerCase() + ': ' + klass.range + '. Serie mostrada para ' + state.startYear + '–' + state.endYear + '; el gráfico incluye toda la trayectoria anual disponible.';
+      panelNote.textContent = 'Rango del ' + scheme.singular.toLowerCase() + ': ' + klass.range + '. Eje izquierdo: distrito. Eje derecho: provincia. Serie mostrada para ' + state.startYear + '–' + state.endYear + '; el gráfico incluye toda la trayectoria anual disponible.';
 
-      const values = district.values.map(value => value === null ? null : Number(value));
-      const trace = {{
+      const districtValues = district.values.map(value => value === null ? null : Number(value));
+      const districtTrace = {{
         x: district.years,
-        y: values,
+        y: districtValues,
         type: 'scatter',
+        name: 'Distrito',
         mode: 'lines+markers',
         connectgaps: false,
+        yaxis: 'y',
         line: {{
           color: '#1f4d1e',
           width: 3,
@@ -1649,11 +1700,43 @@ def _build_interactive_dashboard_html(
             width: 1.4
           }}
         }},
-        hovertemplate: 'Año %{{x}}<br>PBI: %{{y:,.0f}}<extra></extra>'
+        hovertemplate: '<b>' + district.distrito + '</b><br>Año %{{x}}<br>PBI distrital: %{{y:,.0f}}<extra></extra>'
       }};
+      const traces = [districtTrace];
+
+      if (province) {{
+        const provinceValues = province.values.map(value => value === null ? null : Number(value));
+        traces.push({{
+          x: province.years,
+          y: provinceValues,
+          type: 'scatter',
+          name: 'Provincia',
+          mode: 'lines+markers',
+          connectgaps: false,
+          yaxis: 'y2',
+          line: {{
+            color: '#8a3f1d',
+            width: 3,
+            dash: 'dot',
+            shape: 'linear'
+          }},
+          marker: {{
+            size: 6,
+            color: '#e36a4b',
+            symbol: 'diamond',
+            line: {{
+              color: '#f8f4ec',
+              width: 1.2
+            }}
+          }},
+          hovertemplate: '<b>' + province.provincia + '</b><br>Año %{{x}}<br>PBI provincial: %{{y:,.0f}}<extra></extra>'
+        }});
+      }} else {{
+        panelNote.textContent += ' No se encontró una serie provincial para este distrito.';
+      }}
 
       const seriesLayout = {{
-        margin: {{ l: 54, r: 14, t: 14, b: 42 }},
+        margin: {{ l: 58, r: 68, t: 42, b: 42 }},
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: '#fbf8f2',
         font: {{
@@ -1670,11 +1753,37 @@ def _build_interactive_dashboard_html(
           linecolor: 'rgba(127, 136, 145, 0.18)'
         }},
         yaxis: {{
-          title: 'PBI',
-          tickfont: {{ size: 11 }},
+          title: {{
+            text: 'PBI distrito',
+            font: {{ size: 12, color: '#1f4d1e' }}
+          }},
+          tickfont: {{ size: 11, color: '#1f4d1e' }},
           gridcolor: 'rgba(127, 136, 145, 0.14)',
           zeroline: false,
           separatethousands: true
+        }},
+        yaxis2: {{
+          title: {{
+            text: 'PBI provincia',
+            font: {{ size: 12, color: '#8a3f1d' }}
+          }},
+          tickfont: {{ size: 11, color: '#8a3f1d' }},
+          overlaying: 'y',
+          side: 'right',
+          showgrid: false,
+          zeroline: false,
+          separatethousands: true
+        }},
+        legend: {{
+          orientation: 'h',
+          x: 0,
+          y: 1.14,
+          xanchor: 'left',
+          yanchor: 'bottom',
+          bgcolor: 'rgba(255,255,255,0.74)',
+          bordercolor: 'rgba(216, 208, 193, 0.78)',
+          borderwidth: 1,
+          font: {{ size: 11 }}
         }},
         hoverlabel: {{
           bgcolor: 'rgba(255,255,255,0.96)',
@@ -1684,10 +1793,11 @@ def _build_interactive_dashboard_html(
             size: 12
           }}
         }},
-        showlegend: false
+        hovermode: 'x',
+        showlegend: true
       }};
 
-      Plotly.react('series-plot', [trace], seriesLayout, {{
+      Plotly.react('series-plot', traces, seriesLayout, {{
         responsive: true,
         displayModeBar: false
       }});
@@ -1948,7 +2058,7 @@ def build_interactive_growth_artifacts(
             "toggleSpikelines",
         ],
     }
-    trajectory_payload = _build_trajectory_payload(
+    trajectory_payload, province_payload = _build_trajectory_payload(
         prepared,
         excel_path=excel_path,
     )
@@ -1956,6 +2066,7 @@ def build_interactive_growth_artifacts(
         figure,
         config=config,
         trajectory_payload=trajectory_payload,
+        province_payload=province_payload,
         classification_modes=CLASSIFICATION_MODES,
     )
     html_path.write_text(html_string, encoding="utf-8")
