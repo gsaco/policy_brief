@@ -16,10 +16,12 @@ from cartopy.io import shapereader
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HTML_NAME = "tasa_crecimiento_promedio_distritos_interactivo.html"
 DEFAULT_PAGES_DIR = ROOT / "docs"
+DEFAULT_CEMS_REL = Path("drive-download-20260319T015805Z-1-001/Data_Final_CEMS.xlsx")
 LOWERCASE_WORDS = {"de", "del", "la", "las", "los", "y", "e", "o", "u", "da", "das", "do", "dos"}
 ROMAN_NUMERAL_RE = re.compile(r"^[ivxlcdm]+$", re.IGNORECASE)
 DEFAULT_CLASSIFICATION_MODE = "deciles"
 DEFAULT_COLOR_PRESET = "red_green"
+DEFAULT_COMPARISON_SERIES = "province_pbi"
 CLASSIFICATION_MODES = {
     "deciles": {
         "label": "Deciles",
@@ -89,6 +91,69 @@ COLOR_PRESETS = {
         ],
     },
 }
+DISTRICT_COMPARISON_SPECS = {
+    "district_idh": {
+        "prefix": "IDH",
+        "label": "IDH del distrito",
+        "short_label": "IDH distrito",
+        "axis_title": "IDH",
+        "unit": "Indice",
+        "format": "decimal3",
+        "color": "#295a8a",
+        "marker_color": "#7ea6c6",
+        "dash": "solid",
+        "symbol": "circle",
+        "description": "Indice de Desarrollo Humano distrital. Solo se muestran los anos disponibles hasta 2018.",
+    },
+    "district_transfers": {
+        "prefix": "Trans",
+        "label": "Transferencias del gobierno",
+        "short_label": "Transferencias",
+        "axis_title": "Transferencias (S/)",
+        "unit": "Soles",
+        "format": "integer",
+        "color": "#8a3f1d",
+        "marker_color": "#e36a4b",
+        "dash": "solid",
+        "symbol": "diamond",
+        "description": "Transferencias del Gobierno Nacional al distrito.",
+    },
+    "district_iae": {
+        "prefix": "IAE",
+        "label": "IAE del distrito",
+        "short_label": "IAE distrito",
+        "axis_title": "IAE",
+        "unit": "Indice",
+        "format": "decimal3",
+        "color": "#5f6f2a",
+        "marker_color": "#a6b84f",
+        "dash": "solid",
+        "symbol": "square",
+        "description": "Indice de Actividad Economica distrital.",
+    },
+}
+COMPARISON_SERIES_OPTIONS = {
+    "province_pbi": {
+        "label": "PBI de la provincia",
+        "short_label": "PBI provincia",
+        "axis_title": "PBI provincia",
+        "unit": "Dolares Geary-Khamis 1990",
+        "format": "integer",
+        "color": "#7c3f1d",
+        "marker_color": "#c36a3c",
+        "dash": "dot",
+        "symbol": "diamond",
+        "description": "PBI total de la provincia a la que pertenece el distrito.",
+    },
+    **{
+        key: {
+            option_key: value
+            for option_key, value in spec.items()
+            if option_key != "prefix"
+        }
+        for key, spec in DISTRICT_COMPARISON_SPECS.items()
+    },
+}
 
 
 def resolve_existing_path(relative_candidates: list[Path]) -> Path:
@@ -142,6 +207,55 @@ def _format_ubigeo(series: pd.Series, digits: int = 6) -> pd.Series:
     mask = numeric.notna()
     out.loc[mask] = numeric.loc[mask].astype(int).astype(str).str.zfill(digits)
     return out
+
+
+def _resolve_cems_path(excel_path: Path | None = None) -> Path:
+    return excel_path or resolve_existing_path([DEFAULT_CEMS_REL])
+
+
+def _read_cems_sheet(excel_path: Path | None, sheet_name: str) -> pd.DataFrame:
+    return pd.read_excel(_resolve_cems_path(excel_path), sheet_name=sheet_name, header=1)
+
+
+def _extract_prefixed_year_columns(
+    df: pd.DataFrame,
+    prefix: str,
+    *,
+    min_year: int = 1993,
+    max_year: int = 2018,
+) -> list[tuple[int, str]]:
+    year_pairs: list[tuple[int, str]] = []
+    pattern = re.compile(rf"^{re.escape(prefix)}(\d{{4}})$")
+    for column in df.columns:
+        if not isinstance(column, str):
+            continue
+        match = pattern.fullmatch(column.strip())
+        if not match:
+            continue
+        year = int(match.group(1))
+        if min_year <= year <= max_year:
+            year_pairs.append((year, column))
+
+    return sorted(year_pairs)
+
+
+def _require_prefixed_year_columns(
+    df: pd.DataFrame,
+    prefix: str,
+    *,
+    sheet_name: str,
+    min_year: int = 1993,
+    max_year: int = 2018,
+) -> list[tuple[int, str]]:
+    year_pairs = _extract_prefixed_year_columns(
+        df,
+        prefix,
+        min_year=min_year,
+        max_year=max_year,
+    )
+    if not year_pairs:
+        raise ValueError(f"No se encontraron columnas {prefix}YYYY en {sheet_name}.")
+    return year_pairs
 
 
 def _compute_quantile_bins(values: pd.Series, q: int = 10) -> np.ndarray:
@@ -265,7 +379,6 @@ def load_district_growth_map(
     excel_path: Path | None = None,
     geo_path: Path | None = None,
 ) -> gpd.GeoDataFrame:
-    excel_path = excel_path or resolve_existing_path([Path("contribuciones.xlsx")])
     geo_path = geo_path or resolve_existing_path(
         [
             Path("notebooks/_cache_cartopy/peru_distrital_simple.geojson"),
@@ -288,21 +401,24 @@ def load_district_growth_map(
 
     district_geom = _fill_missing_district_geometries(district_geom)
 
-    dist_levels_raw = pd.read_excel(excel_path, sheet_name="PIB_Dist")
-    dist_levels_raw["ubigeo"] = _format_ubigeo(dist_levels_raw["Ubigeo"])
-    dist_levels_raw[1993] = pd.to_numeric(dist_levels_raw[1993], errors="coerce")
-    dist_levels_raw[2018] = pd.to_numeric(dist_levels_raw[2018], errors="coerce")
+    dist_levels_raw = _read_cems_sheet(excel_path, "Datos_Dist")
+    dist_levels_raw["ubigeo"] = _format_ubigeo(dist_levels_raw["IDDIST"])
+    for column in ["PBI1993", "PBI2018"]:
+        if column not in dist_levels_raw.columns:
+            raise ValueError(f"Falta la columna {column} en Datos_Dist.")
+        dist_levels_raw[column] = pd.to_numeric(dist_levels_raw[column], errors="coerce")
 
     dist_levels = dist_levels_raw.loc[
-        dist_levels_raw["Distrito"].map(_clean_geo_value).fillna("").str.upper().ne("NACIONAL")
-        & dist_levels_raw["Distrito"].notna(),
-        ["ubigeo", 1993, 2018],
+        dist_levels_raw["Dist"].map(_clean_geo_value).fillna("").str.upper().ne("NACIONAL")
+        & dist_levels_raw["Dist"].notna()
+        & dist_levels_raw["ubigeo"].notna(),
+        ["ubigeo", "PBI1993", "PBI2018"],
     ].copy()
 
-    positive_mask = dist_levels[1993].gt(0) & dist_levels[2018].gt(0)
+    positive_mask = dist_levels["PBI1993"].gt(0) & dist_levels["PBI2018"].gt(0)
     dist_levels = dist_levels.loc[positive_mask].copy()
     dist_levels["avg_growth_9318"] = (
-        np.log(dist_levels[2018]) - np.log(dist_levels[1993])
+        np.log(dist_levels["PBI2018"]) - np.log(dist_levels["PBI1993"])
     ) / (2018 - 1993 + 1)
 
     map_gdf = district_geom.merge(
@@ -314,40 +430,95 @@ def load_district_growth_map(
 
 
 def load_district_pib_trajectories(*, excel_path: Path | None = None) -> tuple[pd.DataFrame, list[int]]:
-    excel_path = excel_path or resolve_existing_path([Path("contribuciones.xlsx")])
-    dist_levels_raw = pd.read_excel(excel_path, sheet_name="PIB_Dist")
-    dist_levels_raw["ubigeo"] = _format_ubigeo(dist_levels_raw["Ubigeo"])
+    dist_levels_raw = _read_cems_sheet(excel_path, "Datos_Dist")
+    year_pairs = _require_prefixed_year_columns(
+        dist_levels_raw,
+        "PBI",
+        sheet_name="Datos_Dist",
+        min_year=1993,
+        max_year=2018,
+    )
+    years = [year for year, _ in year_pairs]
+    pbi_columns = [column for _, column in year_pairs]
+    rename_map = {column: year for year, column in year_pairs}
+    dist_levels_raw["ubigeo"] = _format_ubigeo(dist_levels_raw["IDDIST"])
 
-    year_columns = [year for year in range(1993, 2019) if year in dist_levels_raw.columns]
-    keep_columns = ["ubigeo", "Departamento", "Provincia", "Distrito", *year_columns]
     trajectories = dist_levels_raw.loc[
-        dist_levels_raw["Distrito"].map(_clean_geo_value).fillna("").str.upper().ne("NACIONAL")
-        & dist_levels_raw["Distrito"].notna(),
-        keep_columns,
+        dist_levels_raw["Dist"].map(_clean_geo_value).fillna("").str.upper().ne("NACIONAL")
+        & dist_levels_raw["Dist"].notna()
+        & dist_levels_raw["ubigeo"].notna(),
+        ["ubigeo", "Dep", "Prov", "Dist", *pbi_columns],
     ].copy()
+    trajectories = trajectories.rename(
+        columns={
+            "Dep": "Departamento",
+            "Prov": "Provincia",
+            "Dist": "Distrito",
+            **rename_map,
+        }
+    )
 
     for column in ["Departamento", "Provincia", "Distrito"]:
         trajectories[column] = trajectories[column].map(_pretty_geo_name)
-    trajectories[year_columns] = trajectories[year_columns].apply(pd.to_numeric, errors="coerce")
-    return trajectories, year_columns
+    trajectories[years] = trajectories[years].apply(pd.to_numeric, errors="coerce")
+    return trajectories, years
 
 
 def load_province_pib_trajectories(*, excel_path: Path | None = None) -> tuple[pd.DataFrame, list[int]]:
-    excel_path = excel_path or resolve_existing_path([Path("contribuciones.xlsx")])
-    prov_levels_raw = pd.read_excel(excel_path, sheet_name="PIB_Prov")
-    prov_levels_raw["province_ubigeo"] = _format_ubigeo(prov_levels_raw["Ubigeo"])
+    prov_levels_raw = _read_cems_sheet(excel_path, "Datos_Prov")
+    year_pairs = _require_prefixed_year_columns(
+        prov_levels_raw,
+        "PBI",
+        sheet_name="Datos_Prov",
+        min_year=1993,
+        max_year=2018,
+    )
+    years = [year for year, _ in year_pairs]
+    pbi_columns = [column for _, column in year_pairs]
+    rename_map = {column: year for year, column in year_pairs}
+    province_code = _format_ubigeo(prov_levels_raw["IDPROV"], digits=4)
+    prov_levels_raw["province_ubigeo"] = province_code + "00"
 
-    year_columns = [year for year in range(1993, 2019) if year in prov_levels_raw.columns]
-    keep_columns = ["province_ubigeo", "Departamento", "Provincia", *year_columns]
     trajectories = prov_levels_raw.loc[
         prov_levels_raw["Provincia"].map(_clean_geo_value).notna(),
-        keep_columns,
+        ["province_ubigeo", "Departamento", "Provincia", *pbi_columns],
     ].copy()
+    trajectories = trajectories.rename(columns=rename_map)
 
     for column in ["Departamento", "Provincia"]:
         trajectories[column] = trajectories[column].map(_pretty_geo_name)
-    trajectories[year_columns] = trajectories[year_columns].apply(pd.to_numeric, errors="coerce")
-    return trajectories, year_columns
+    trajectories[years] = trajectories[years].apply(pd.to_numeric, errors="coerce")
+    return trajectories, years
+
+
+def load_district_variable_trajectories(
+    *,
+    prefix: str,
+    excel_path: Path | None = None,
+    min_year: int = 1993,
+    max_year: int = 2018,
+) -> tuple[pd.DataFrame, list[int]]:
+    raw = _read_cems_sheet(excel_path, "Datos_Dist")
+    year_pairs = _require_prefixed_year_columns(
+        raw,
+        prefix,
+        sheet_name="Datos_Dist",
+        min_year=min_year,
+        max_year=max_year,
+    )
+    years = [year for year, _ in year_pairs]
+    value_columns = [column for _, column in year_pairs]
+    rename_map = {column: year for year, column in year_pairs}
+    raw["ubigeo"] = _format_ubigeo(raw["IDDIST"])
+    trajectories = raw.loc[
+        raw["Dist"].map(_clean_geo_value).fillna("").str.upper().ne("NACIONAL")
+        & raw["Dist"].notna()
+        & raw["ubigeo"].notna(),
+        ["ubigeo", *value_columns],
+    ].copy()
+    trajectories = trajectories.rename(columns=rename_map)
+    trajectories[years] = trajectories[years].apply(pd.to_numeric, errors="coerce")
+    return trajectories, years
 
 
 def prepare_growth_ranking(map_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -516,6 +687,16 @@ def _build_trajectory_payload(
         validate="one_to_one",
     )
 
+    comparison_frames: dict[str, tuple[pd.DataFrame, list[int]]] = {}
+    for key, spec in DISTRICT_COMPARISON_SPECS.items():
+        frame, comparison_years = load_district_variable_trajectories(
+            prefix=spec["prefix"],
+            excel_path=excel_path,
+            min_year=1993,
+            max_year=2018,
+        )
+        comparison_frames[key] = (frame.drop_duplicates(subset=["ubigeo"], keep="first").set_index("ubigeo"), comparison_years)
+
     province_payload = {}
     province_trajectories = province_trajectories.drop_duplicates(subset=["province_ubigeo"], keep="first")
     province_trajectories = province_trajectories.set_index("province_ubigeo")
@@ -537,6 +718,22 @@ def _build_trajectory_payload(
 
     district_payload = {}
     for _, row in merged.iterrows():
+        ubigeo = str(row["ubigeo"])
+        comparisons = {}
+        for key, (frame, comparison_years) in comparison_frames.items():
+            if ubigeo not in frame.index:
+                continue
+            comparison_row = frame.loc[ubigeo]
+            values = [
+                None if pd.isna(comparison_row[year]) else float(comparison_row[year])
+                for year in comparison_years
+            ]
+            if any(value is not None for value in values):
+                comparisons[key] = {
+                    "years": comparison_years,
+                    "values": values,
+                }
+
         district_payload[str(row["ubigeo"])] = {
             "ubigeo": str(row["ubigeo"]),
             "province_ubigeo": str(row["province_ubigeo"]),
@@ -550,6 +747,7 @@ def _build_trajectory_payload(
                 None if pd.isna(row[year]) else float(row[year])
                 for year in years
             ],
+            "comparisons": comparisons,
         }
 
     return district_payload, province_payload
@@ -561,6 +759,7 @@ def _build_interactive_dashboard_html(
     config: dict,
     trajectory_payload: dict,
     province_payload: dict,
+    comparison_options: dict,
     classification_modes: dict,
 ) -> str:
     plot_div = pio.to_html(
@@ -572,6 +771,7 @@ def _build_interactive_dashboard_html(
     )
     trajectory_json = json.dumps(trajectory_payload, ensure_ascii=False)
     province_json = json.dumps(province_payload, ensure_ascii=False)
+    comparison_options_json = json.dumps(comparison_options, ensure_ascii=False)
     classification_json = json.dumps(classification_modes, ensure_ascii=False)
     palette_json = json.dumps(COLOR_PRESETS, ensure_ascii=False)
     classification_options = "\n".join(
@@ -584,6 +784,12 @@ def _build_interactive_dashboard_html(
         [
             f'<option value="{key}"{" selected" if key == DEFAULT_COLOR_PRESET else ""}>{meta["label"]}</option>'
             for key, meta in COLOR_PRESETS.items()
+        ]
+    )
+    comparison_series_options = "\n".join(
+        [
+            f'<option value="{key}"{" selected" if key == DEFAULT_COMPARISON_SERIES else ""}>{meta["label"]}</option>'
+            for key, meta in comparison_options.items()
         ]
     )
 
@@ -1000,6 +1206,37 @@ def _build_interactive_dashboard_html(
       font-weight: 800;
       line-height: 1.15;
     }}
+    .series-control {{
+      display: grid;
+      gap: 6px;
+      margin: 0 0 12px;
+      padding: 12px;
+      border: 1px solid rgba(216, 208, 193, 0.92);
+      border-radius: 14px;
+      background: #faf7f1;
+    }}
+    .series-control-label {{
+      font-size: 10px;
+      font-weight: 800;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }}
+    .series-select {{
+      width: 100%;
+      border: 1px solid #d7cfbf;
+      border-radius: 12px;
+      background: #ffffff;
+      color: var(--text);
+      padding: 10px 11px;
+      font-size: 13px;
+      font-weight: 800;
+      outline: none;
+    }}
+    .series-select:focus {{
+      border-color: #7f943f;
+      box-shadow: 0 0 0 3px rgba(127, 148, 63, 0.16);
+    }}
     #series-plot {{
       width: 100%;
       min-height: 320px;
@@ -1268,7 +1505,7 @@ def _build_interactive_dashboard_html(
             </label>
           </div>
           <p class="controls-footnote">Base inicial: deciles con paleta rojo → verde. Puedes cambiar ambas opciones sin recargar el mapa.</p>
-          <p class="controls-note-secondary">Pasa el cursor sobre un distrito para ver su información. Haz clic para comparar su PBI con la trayectoria provincial.</p>
+          <p class="controls-note-secondary">Pasa el cursor sobre un distrito para ver su información. Haz clic para comparar su PBI con IDH, transferencias, IAE o PBI provincial.</p>
         </div>
         <div id="years-shell" class="years-shell">
           <p class="years-title">Rango temporal del cálculo</p>
@@ -1303,7 +1540,7 @@ def _build_interactive_dashboard_html(
         <div>
           <p class="panel-kicker">Trayectoria del PBI</p>
           <h2 id="panel-title" class="panel-title">Selecciona un distrito</h2>
-          <p id="panel-subtitle" class="panel-subtitle">Haz clic sobre cualquier distrito del mapa para abrir su serie 1993-2018 junto con la provincial.</p>
+          <p id="panel-subtitle" class="panel-subtitle">Haz clic sobre cualquier distrito del mapa para abrir su serie 1993-2018 y elegir la comparación del eje derecho.</p>
         </div>
         <button id="panel-close" class="panel-close" type="button" aria-label="Cerrar panel">×</button>
       </div>
@@ -1311,7 +1548,7 @@ def _build_interactive_dashboard_html(
         <div id="panel-placeholder" class="panel-placeholder">
           <span class="placeholder-chip">Clic en el mapa</span>
           <p class="placeholder-title">Series anuales de PBI</p>
-          <p class="placeholder-copy">Al seleccionar un distrito se mostrará su trayectoria anual de PBI entre 1993 y 2018 y, en el eje derecho, la trayectoria de su provincia.</p>
+          <p class="placeholder-copy">Al seleccionar un distrito se mostrará su trayectoria anual de PBI entre 1993 y 2018. El eje derecho puede mostrar PBI provincial, IDH, transferencias o IAE según disponibilidad.</p>
         </div>
         <div id="panel-content" style="display:none;">
           <div class="metrics-grid">
@@ -1328,6 +1565,12 @@ def _build_interactive_dashboard_html(
               <p id="metric-growth" class="metric-value"></p>
             </div>
           </div>
+          <label class="series-control">
+            <span class="series-control-label">Serie del eje derecho</span>
+            <select id="comparison-series" class="series-select">
+              {comparison_series_options}
+            </select>
+          </label>
           <div id="series-plot"></div>
           <p id="panel-note" class="panel-note"></p>
         </div>
@@ -1338,14 +1581,17 @@ def _build_interactive_dashboard_html(
   <script>
     const DISTRICT_SERIES = {trajectory_json};
     const PROVINCE_SERIES = {province_json};
+    const COMPARISON_OPTIONS = {comparison_options_json};
     const CLASSIFICATION_PRESETS = {classification_json};
     const COLOR_PRESETS = {palette_json};
     const DEFAULT_MODE = '{DEFAULT_CLASSIFICATION_MODE}';
     const DEFAULT_PALETTE = '{DEFAULT_COLOR_PRESET}';
+    const DEFAULT_COMPARISON = '{DEFAULT_COMPARISON_SERIES}';
     const AVAILABLE_YEARS = Object.values(DISTRICT_SERIES)[0].years.slice();
     const state = {{
       mode: DEFAULT_MODE,
       palette: DEFAULT_PALETTE,
+      comparisonKey: DEFAULT_COMPARISON,
       selectedUbigeo: null,
       startYear: AVAILABLE_YEARS[0],
       endYear: AVAILABLE_YEARS[AVAILABLE_YEARS.length - 1],
@@ -1373,6 +1619,7 @@ def _build_interactive_dashboard_html(
     const metricClassLabel = document.getElementById('metric-class-label');
     const metricClass = document.getElementById('metric-class');
     const metricGrowth = document.getElementById('metric-growth');
+    const comparisonSeriesSelect = document.getElementById('comparison-series');
     const panelNote = document.getElementById('panel-note');
     let mapEventsBound = false;
 
@@ -1391,6 +1638,25 @@ def _build_interactive_dashboard_html(
       return new Intl.NumberFormat('es-PE', {{
         maximumFractionDigits: 0,
       }}).format(value);
+    }}
+
+    function formatSeriesValue(value, format) {{
+      if (value === null || value === undefined || Number.isNaN(value)) {{
+        return 'NA';
+      }}
+      if (format === 'decimal3') {{
+        return new Intl.NumberFormat('es-PE', {{
+          minimumFractionDigits: 3,
+          maximumFractionDigits: 3,
+        }}).format(value);
+      }}
+      return new Intl.NumberFormat('es-PE', {{
+        maximumFractionDigits: 0,
+      }}).format(value);
+    }}
+
+    function plotlyValueFormat(format) {{
+      return format === 'decimal3' ? ',.3f' : ',.0f';
     }}
 
     function getActiveScheme() {{
@@ -1648,10 +1914,83 @@ def _build_interactive_dashboard_html(
       state.selectedUbigeo = null;
       districtPanel.classList.add('is-hidden');
       panelTitle.textContent = 'Selecciona un distrito';
-      panelSubtitle.textContent = 'Haz clic sobre cualquier distrito del mapa para abrir su serie 1993-2018 junto con la provincial.';
+      panelSubtitle.textContent = 'Haz clic sobre cualquier distrito del mapa para abrir su serie 1993-2018 y elegir la comparación del eje derecho.';
       panelPlaceholder.style.display = 'grid';
       panelContent.style.display = 'none';
       Plotly.purge('series-plot');
+    }}
+
+    function getComparisonSeries(district) {{
+      const key = state.comparisonKey;
+      const option = COMPARISON_OPTIONS[key] || COMPARISON_OPTIONS[DEFAULT_COMPARISON];
+      if (key === 'province_pbi') {{
+        const province = district.province_ubigeo ? PROVINCE_SERIES[String(district.province_ubigeo)] : null;
+        if (!province) {{
+          return {{ option, series: null, emptyReason: 'No se encontró una serie provincial para este distrito.' }};
+        }}
+        return {{
+          option,
+          series: {{
+            years: province.years,
+            values: province.values,
+            name: province.provincia,
+            contextLabel: province.provincia + ', ' + province.departamento
+          }},
+          emptyReason: ''
+        }};
+      }}
+
+      const series = district.comparisons ? district.comparisons[key] : null;
+      if (!series || !series.values || !series.values.some(value => value !== null && Number.isFinite(Number(value)))) {{
+        return {{ option, series: null, emptyReason: 'No hay observaciones disponibles para ' + option.label + ' en este distrito.' }};
+      }}
+      return {{
+        option,
+        series: {{
+          years: series.years,
+          values: series.values,
+          name: option.short_label,
+          contextLabel: district.distrito + ', ' + district.provincia
+        }},
+        emptyReason: ''
+      }};
+    }}
+
+    function buildComparisonTrace(comparison) {{
+      if (!comparison.series) {{
+        return null;
+      }}
+      const option = comparison.option;
+      const values = comparison.series.values.map(value => value === null ? null : Number(value));
+      const hoverFormat = plotlyValueFormat(option.format);
+      return {{
+        x: comparison.series.years,
+        y: values,
+        type: 'scatter',
+        name: option.short_label,
+        mode: 'lines+markers',
+        connectgaps: false,
+        yaxis: 'y2',
+        line: {{
+          color: option.color,
+          width: 3,
+          dash: option.dash,
+          shape: 'linear'
+        }},
+        marker: {{
+          size: 6,
+          color: option.marker_color,
+          symbol: option.symbol,
+          line: {{
+            color: '#f8f4ec',
+            width: 1.2
+          }}
+        }},
+        hovertemplate: '<b>' + option.label + '</b><br>' +
+          comparison.series.contextLabel + '<br>' +
+          'Año %{{x}}<br>' +
+          option.short_label + ': %{{y:' + hoverFormat + '}}<extra></extra>'
+      }};
     }}
 
     function renderSeriesPanel(ubigeo) {{
@@ -1663,7 +2002,8 @@ def _build_interactive_dashboard_html(
       state.currentMetrics = currentMetrics;
       const scheme = currentMetrics.scheme;
       const klass = currentMetrics.byUbigeo[String(ubigeo)];
-      const province = district.province_ubigeo ? PROVINCE_SERIES[String(district.province_ubigeo)] : null;
+      const comparison = getComparisonSeries(district);
+      const comparisonTrace = buildComparisonTrace(comparison);
 
       state.selectedUbigeo = String(ubigeo);
       districtPanel.classList.remove('is-hidden');
@@ -1676,7 +2016,16 @@ def _build_interactive_dashboard_html(
       metricClassLabel.textContent = scheme.singular;
       metricClass.textContent = klass.label;
       metricGrowth.textContent = formatGrowth(klass.growth);
-      panelNote.textContent = 'Rango del ' + scheme.singular.toLowerCase() + ': ' + klass.range + '. Eje izquierdo: distrito. Eje derecho: provincia. Serie mostrada para ' + state.startYear + '–' + state.endYear + '; el gráfico incluye toda la trayectoria anual disponible.';
+      if (comparisonSeriesSelect) {{
+        comparisonSeriesSelect.value = state.comparisonKey;
+      }}
+      const comparisonYears = comparison.series
+        ? Math.min(...comparison.series.years) + '–' + Math.max(...comparison.series.years)
+        : 'sin datos';
+      panelNote.textContent = 'Rango del ' + scheme.singular.toLowerCase() + ': ' + klass.range + '. Eje izquierdo: PBI distrital. Eje derecho: ' + comparison.option.label + ' (' + comparisonYears + '). Serie mostrada para el cálculo del mapa: ' + state.startYear + '–' + state.endYear + '; el gráfico conserva toda la trayectoria anual disponible.';
+      if (comparison.emptyReason) {{
+        panelNote.textContent += ' ' + comparison.emptyReason;
+      }}
 
       const districtValues = district.values.map(value => value === null ? null : Number(value));
       const districtTrace = {{
@@ -1703,36 +2052,8 @@ def _build_interactive_dashboard_html(
         hovertemplate: '<b>' + district.distrito + '</b><br>Año %{{x}}<br>PBI distrital: %{{y:,.0f}}<extra></extra>'
       }};
       const traces = [districtTrace];
-
-      if (province) {{
-        const provinceValues = province.values.map(value => value === null ? null : Number(value));
-        traces.push({{
-          x: province.years,
-          y: provinceValues,
-          type: 'scatter',
-          name: 'Provincia',
-          mode: 'lines+markers',
-          connectgaps: false,
-          yaxis: 'y2',
-          line: {{
-            color: '#8a3f1d',
-            width: 3,
-            dash: 'dot',
-            shape: 'linear'
-          }},
-          marker: {{
-            size: 6,
-            color: '#e36a4b',
-            symbol: 'diamond',
-            line: {{
-              color: '#f8f4ec',
-              width: 1.2
-            }}
-          }},
-          hovertemplate: '<b>' + province.provincia + '</b><br>Año %{{x}}<br>PBI provincial: %{{y:,.0f}}<extra></extra>'
-        }});
-      }} else {{
-        panelNote.textContent += ' No se encontró una serie provincial para este distrito.';
+      if (comparisonTrace) {{
+        traces.push(comparisonTrace);
       }}
 
       const seriesLayout = {{
@@ -1764,10 +2085,10 @@ def _build_interactive_dashboard_html(
         }},
         yaxis2: {{
           title: {{
-            text: 'PBI provincia',
-            font: {{ size: 12, color: '#8a3f1d' }}
+            text: comparison.option.axis_title,
+            font: {{ size: 12, color: comparison.option.color }}
           }},
-          tickfont: {{ size: 11, color: '#8a3f1d' }},
+          tickfont: {{ size: 11, color: comparison.option.color }},
           overlaying: 'y',
           side: 'right',
           showgrid: false,
@@ -1826,6 +2147,9 @@ def _build_interactive_dashboard_html(
       bindMapEvents();
       classificationSelect.value = DEFAULT_MODE;
       colorPresetSelect.value = DEFAULT_PALETTE;
+      if (comparisonSeriesSelect) {{
+        comparisonSeriesSelect.value = DEFAULT_COMPARISON;
+      }}
       yearRangeStart.value = state.startYear;
       yearRangeEnd.value = state.endYear;
       state.currentMetrics = buildCurrentMetrics();
@@ -1843,6 +2167,14 @@ def _build_interactive_dashboard_html(
       state.palette = event.target.value;
       applyMapEncoding();
     }});
+    if (comparisonSeriesSelect) {{
+      comparisonSeriesSelect.addEventListener('change', function(event) {{
+        state.comparisonKey = event.target.value;
+        if (state.selectedUbigeo) {{
+          renderSeriesPanel(state.selectedUbigeo);
+        }}
+      }});
+    }}
     yearRangeStart.addEventListener('input', function(event) {{
       let nextStart = Number(event.target.value);
       if (nextStart >= state.endYear) {{
@@ -2067,6 +2399,7 @@ def build_interactive_growth_artifacts(
         config=config,
         trajectory_payload=trajectory_payload,
         province_payload=province_payload,
+        comparison_options=COMPARISON_SERIES_OPTIONS,
         classification_modes=CLASSIFICATION_MODES,
     )
     html_path.write_text(html_string, encoding="utf-8")
