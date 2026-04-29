@@ -217,6 +217,23 @@ def _read_cems_sheet(excel_path: Path | None, sheet_name: str) -> pd.DataFrame:
     return pd.read_excel(_resolve_cems_path(excel_path), sheet_name=sheet_name, header=1)
 
 
+def _compact_json(data) -> str:
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
+def _json_number(value, *, digits: int | None = None):
+    if pd.isna(value):
+        return None
+    number = float(value)
+    if not np.isfinite(number):
+        return None
+    if digits is None:
+        return number
+    if digits == 0:
+        return int(round(number))
+    return round(number, digits)
+
+
 def _extract_prefixed_year_columns(
     df: pd.DataFrame,
     prefix: str,
@@ -711,7 +728,7 @@ def _build_trajectory_payload(
             "departamento": row["Departamento"],
             "years": years,
             "values": [
-                None if pd.isna(row[year]) else float(row[year])
+                _json_number(row[year], digits=0)
                 for year in years
             ],
         }
@@ -724,8 +741,9 @@ def _build_trajectory_payload(
             if ubigeo not in frame.index:
                 continue
             comparison_row = frame.loc[ubigeo]
+            value_digits = 6 if DISTRICT_COMPARISON_SPECS[key]["format"] == "decimal3" else 0
             values = [
-                None if pd.isna(comparison_row[year]) else float(comparison_row[year])
+                _json_number(comparison_row[year], digits=value_digits)
                 for year in comparison_years
             ]
             if any(value is not None for value in values):
@@ -741,10 +759,10 @@ def _build_trajectory_payload(
             "provincia": row["Provincia"],
             "departamento": row["Departamento"],
             "growth_rank": int(row["growth_rank"]),
-            "avg_growth_9318": float(row["avg_growth_9318"]),
+            "avg_growth_9318": _json_number(row["avg_growth_9318"], digits=12),
             "years": years,
             "values": [
-                None if pd.isna(row[year]) else float(row[year])
+                _json_number(row[year], digits=0)
                 for year in years
             ],
             "comparisons": comparisons,
@@ -769,11 +787,11 @@ def _build_interactive_dashboard_html(
         config=config,
         div_id="district-map",
     )
-    trajectory_json = json.dumps(trajectory_payload, ensure_ascii=False)
-    province_json = json.dumps(province_payload, ensure_ascii=False)
-    comparison_options_json = json.dumps(comparison_options, ensure_ascii=False)
-    classification_json = json.dumps(classification_modes, ensure_ascii=False)
-    palette_json = json.dumps(COLOR_PRESETS, ensure_ascii=False)
+    trajectory_json = _compact_json(trajectory_payload)
+    province_json = _compact_json(province_payload)
+    comparison_options_json = _compact_json(comparison_options)
+    classification_json = _compact_json(classification_modes)
+    palette_json = _compact_json(COLOR_PRESETS)
     classification_options = "\n".join(
         [
             f'<option value="{key}"{" selected" if key == DEFAULT_CLASSIFICATION_MODE else ""}>{meta["label"]}</option>'
