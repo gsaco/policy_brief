@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import argparse
 import json
 import re
-import unicodedata
 from pathlib import Path
 
 import geopandas as gpd
@@ -10,13 +10,16 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
-from cartopy.io import shapereader
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = ROOT / "data"
 DEFAULT_HTML_NAME = "tasa_crecimiento_promedio_distritos_interactivo.html"
 DEFAULT_PAGES_DIR = ROOT / "docs"
-DEFAULT_CEMS_REL = Path("drive-download-20260319T015805Z-1-001/Data_Final_CEMS.xlsx")
+DEFAULT_FIGURES_DIR = ROOT / "figures"
+DEFAULT_CEMS_PATH = DATA_DIR / "Data_Final_CEMS.xlsx"
+DEFAULT_DISTRICTS_PATH = DATA_DIR / "peru_districts.geojson"
+DEFAULT_COUNTRIES_PATH = DATA_DIR / "south_america_countries.geojson"
 LOWERCASE_WORDS = {"de", "del", "la", "las", "los", "y", "e", "o", "u", "da", "das", "do", "dos"}
 ROMAN_NUMERAL_RE = re.compile(r"^[ivxlcdm]+$", re.IGNORECASE)
 DEFAULT_CLASSIFICATION_MODE = "deciles"
@@ -156,16 +159,6 @@ COMPARISON_SERIES_OPTIONS = {
 }
 
 
-def resolve_existing_path(relative_candidates: list[Path]) -> Path:
-    roots = [ROOT, ROOT.parent, Path.cwd(), Path.cwd().parent]
-    for root in roots:
-        for relative in relative_candidates:
-            candidate = (root / relative).resolve()
-            if candidate.exists():
-                return candidate
-    raise FileNotFoundError(f"No se encontro ninguno de los paths: {relative_candidates}")
-
-
 def _clean_geo_value(value):
     if pd.isna(value):
         return np.nan
@@ -210,11 +203,15 @@ def _format_ubigeo(series: pd.Series, digits: int = 6) -> pd.Series:
 
 
 def _resolve_cems_path(excel_path: Path | None = None) -> Path:
-    return excel_path or resolve_existing_path([DEFAULT_CEMS_REL])
+    return (excel_path or DEFAULT_CEMS_PATH).resolve()
 
 
 def _read_cems_sheet(excel_path: Path | None, sheet_name: str) -> pd.DataFrame:
-    return pd.read_excel(_resolve_cems_path(excel_path), sheet_name=sheet_name, header=1)
+    return pd.read_excel(
+        _resolve_cems_path(excel_path),
+        sheet_name=sheet_name,
+        header=1,
+    ).copy()
 
 
 def _compact_json(data) -> str:
@@ -329,79 +326,12 @@ def _select_palette_steps(colors: list[str], n_classes: int) -> list[str]:
     return [colors[i] for i in idx]
 
 
-def _normalize_geo_key(value):
-    text = _clean_geo_value(value)
-    if pd.isna(text):
-        return pd.NA
-    text = "".join(
-        char for char in unicodedata.normalize("NFKD", text)
-        if not unicodedata.combining(char)
-    ).upper()
-    text = re.sub(r"[^A-Z0-9]+", "", text)
-    aliases = {
-        "LIMAPROVINCE": "LIMA",
-    }
-    return aliases.get(text, text)
-
-
-def _fill_missing_district_geometries(district_geom: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    enriched = district_geom.copy()
-    missing_mask = enriched.geometry.isna()
-    if not missing_mask.any():
-        return enriched
-
-    for column, key in [("Departamento", "dep_key"), ("Provincia", "prov_key"), ("Distrito", "dist_key")]:
-        enriched[key] = enriched[column].map(_normalize_geo_key)
-
-    gadm_path = resolve_existing_path([Path("notebooks/_cache_cartopy/gadm41_PER_3.json")])
-    gadm = gpd.read_file(gadm_path).to_crs(4326).rename(
-        columns={
-            "NAME_1": "Departamento",
-            "NAME_2": "Provincia",
-            "NAME_3": "Distrito",
-        }
-    )
-    for column, key in [("Departamento", "dep_key"), ("Provincia", "prov_key"), ("Distrito", "dist_key")]:
-        gadm[key] = gadm[column].map(_normalize_geo_key)
-
-    geoboundaries_path = resolve_existing_path([Path("notebooks/_cache_cartopy/geoBoundaries-PER-ADM3.geojson")])
-    geoboundaries = gpd.read_file(geoboundaries_path).to_crs(4326).rename(columns={"shapeName": "Distrito"})
-    geoboundaries["dist_key"] = geoboundaries["Distrito"].map(_normalize_geo_key)
-    geoboundaries_unique = geoboundaries.loc[
-        geoboundaries["dist_key"].notna()
-        & ~geoboundaries["dist_key"].duplicated(keep=False)
-    ].copy()
-
-    for idx, row in enriched.loc[missing_mask].iterrows():
-        gadm_match = gadm.loc[
-            gadm["dep_key"].eq(row["dep_key"])
-            & gadm["prov_key"].eq(row["prov_key"])
-            & gadm["dist_key"].eq(row["dist_key"])
-        ]
-        if len(gadm_match) == 1:
-            enriched.at[idx, "geometry"] = gadm_match.geometry.iloc[0]
-            continue
-
-        geoboundaries_match = geoboundaries_unique.loc[
-            geoboundaries_unique["dist_key"].eq(row["dist_key"])
-        ]
-        if len(geoboundaries_match) == 1:
-            enriched.at[idx, "geometry"] = geoboundaries_match.geometry.iloc[0]
-
-    return enriched.drop(columns=["dep_key", "prov_key", "dist_key"], errors="ignore")
-
-
 def load_district_growth_map(
     *,
     excel_path: Path | None = None,
     geo_path: Path | None = None,
 ) -> gpd.GeoDataFrame:
-    geo_path = geo_path or resolve_existing_path(
-        [
-            Path("notebooks/_cache_cartopy/peru_distrital_simple.geojson"),
-            Path("_cache_cartopy/peru_distrital_simple.geojson"),
-        ]
-    )
+    geo_path = (geo_path or DEFAULT_DISTRICTS_PATH).resolve()
 
     district_geom = gpd.read_file(geo_path).to_crs(4326).rename(
         columns={
@@ -416,7 +346,8 @@ def load_district_growth_map(
     for column in ["Departamento", "Provincia", "Distrito"]:
         district_geom[column] = district_geom[column].map(_pretty_geo_name)
 
-    district_geom = _fill_missing_district_geometries(district_geom)
+    if district_geom.geometry.isna().any():
+        raise ValueError(f"Hay distritos sin geometria en {geo_path}.")
 
     dist_levels_raw = _read_cems_sheet(excel_path, "Datos_Dist")
     dist_levels_raw["ubigeo"] = _format_ubigeo(dist_levels_raw["IDDIST"])
@@ -643,18 +574,12 @@ def _build_context_layers(
     map_gdf: gpd.GeoDataFrame,
     *,
     department_bounds: gpd.GeoDataFrame | None = None,
+    countries_path: Path | None = None,
 ) -> dict:
-    countries_path = shapereader.natural_earth(
-        resolution="10m",
-        category="cultural",
-        name="admin_0_countries",
-    )
-    countries = gpd.read_file(countries_path).to_crs(4326)
-    name_column = "NAME_LONG" if "NAME_LONG" in countries.columns else "ADMIN"
-    countries = countries.rename(columns={name_column: "country_name"})
-    context_countries = countries.loc[
-        countries["CONTINENT"].fillna("").eq("South America")
-    ].copy()
+    countries_path = (countries_path or DEFAULT_COUNTRIES_PATH).resolve()
+    context_countries = gpd.read_file(countries_path).to_crs(4326)
+    if "country_name" not in context_countries.columns:
+        raise ValueError(f"Falta la columna country_name en {countries_path}.")
 
     if department_bounds is None:
         department_bounds = (
@@ -2239,6 +2164,7 @@ def build_interactive_growth_figure(
     *,
     classification_presets: dict,
     department_bounds: gpd.GeoDataFrame | None = None,
+    countries_path: Path | None = None,
     default_mode: str = DEFAULT_CLASSIFICATION_MODE,
     default_palette: str = DEFAULT_COLOR_PRESET,
 ) -> go.Figure:
@@ -2246,7 +2172,11 @@ def build_interactive_growth_figure(
         ranked = map_gdf.copy()
     else:
         ranked = prepare_growth_ranking(map_gdf)
-    context_layers = _build_context_layers(ranked, department_bounds=department_bounds)
+    context_layers = _build_context_layers(
+        ranked,
+        department_bounds=department_bounds,
+        countries_path=countries_path,
+    )
     scheme = classification_presets[default_mode]
     n_classes = int(scheme["classes"])
     palette_colors = _select_palette_steps(COLOR_PRESETS[default_palette]["colors"], n_classes)
@@ -2369,6 +2299,7 @@ def build_interactive_growth_artifacts(
     department_bounds: gpd.GeoDataFrame | None = None,
     excel_path: Path | None = None,
     geo_path: Path | None = None,
+    countries_path: Path | None = None,
     figures_dir: Path | None = None,
     docs_dir: Path | None = None,
     html_name: str = DEFAULT_HTML_NAME,
@@ -2376,8 +2307,8 @@ def build_interactive_growth_artifacts(
     if map_gdf is None:
         map_gdf = load_district_growth_map(excel_path=excel_path, geo_path=geo_path)
 
-    figures_dir = figures_dir or resolve_existing_path([Path("figures")])
-    figures_dir.mkdir(exist_ok=True)
+    figures_dir = (figures_dir or DEFAULT_FIGURES_DIR).resolve()
+    figures_dir.mkdir(parents=True, exist_ok=True)
     docs_dir = (docs_dir or DEFAULT_PAGES_DIR).resolve()
     docs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2387,6 +2318,7 @@ def build_interactive_growth_artifacts(
         prepared,
         classification_presets=classification_presets,
         department_bounds=department_bounds,
+        countries_path=countries_path,
     )
     html_path = figures_dir / html_name
 
@@ -2455,7 +2387,23 @@ def build_interactive_growth_artifacts(
 
 
 def main() -> None:
-    artifacts = build_interactive_growth_artifacts()
+    parser = argparse.ArgumentParser(
+        description="Reconstruye el mapa interactivo y la pagina de GitHub Pages."
+    )
+    parser.add_argument("--excel", type=Path, default=DEFAULT_CEMS_PATH)
+    parser.add_argument("--districts", type=Path, default=DEFAULT_DISTRICTS_PATH)
+    parser.add_argument("--countries", type=Path, default=DEFAULT_COUNTRIES_PATH)
+    parser.add_argument("--figures-dir", type=Path, default=DEFAULT_FIGURES_DIR)
+    parser.add_argument("--docs-dir", type=Path, default=DEFAULT_PAGES_DIR)
+    args = parser.parse_args()
+
+    artifacts = build_interactive_growth_artifacts(
+        excel_path=args.excel,
+        geo_path=args.districts,
+        countries_path=args.countries,
+        figures_dir=args.figures_dir,
+        docs_dir=args.docs_dir,
+    )
     summary = artifacts["summary"].iloc[0]
     print(f"HTML interactivo escrito en: {artifacts['html_path']}")
     print(f"HTML para GitHub Pages escrito en: {artifacts['pages_path']}")
